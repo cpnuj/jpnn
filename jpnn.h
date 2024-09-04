@@ -40,17 +40,27 @@ class Row : public Mat {
 
 namespace matrix {
 Mat& assign(Mat& dst, number x);
-Mat& assign(Mat& dst, const std::vector<number> xs);
+Mat& assign(Mat& dst, const std::vector<number>& xs);
 Mat& assign(Mat& dst, const Mat& m);
+Mat& assign(Row& dst, const Mat& m, int row);
 Mat& add(Mat& dst, const Mat& m1, const Mat& m2);
 Mat& sub(Mat& dst, const Mat& m1, const Mat& m2);
 Mat& dot(Mat& dst, const Mat& m1, const Mat& m2);
+Mat& mul(Mat& dst, const Mat& m1, const Mat& m2);
 Mat& mul(Mat& dst, const Mat& m, number x);
+number max(const Mat& m);
+number sum(const Mat& m);
+
+void rand_seed(int seed);
+number rand_number();
+Mat& random(Mat& dst);
+
 } // namespace matrix
 
 enum class Act {
+  NONE,
   SIGMOID,
-  // TODO: SOFTMAX,
+  SOFTMAX,
 };
 
 class Layer {
@@ -72,15 +82,14 @@ class Layer {
 class NN {
  public:
   void add_layer(int insz, int outsz, Act act = Act::SIGMOID);
+  void random();
   void forward(const Row& input_row, Row& output_row);
   void backward(const Row& pred, const Row& want);
+  void backward(const Row& loss);
   inline int nlayers() { return ls_.size(); }
   void start_learn();
-  void end_learn();
+  void end_learn(number);
   friend std::ostream& operator<<(std::ostream& os, NN& nn);
-
- public:
-  number learning_rate = 1;
 
  private:
   std::vector<Layer> ls_;

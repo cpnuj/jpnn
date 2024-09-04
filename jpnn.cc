@@ -1,5 +1,7 @@
 #include "jpnn.h"
 
+#include <algorithm>
+
 Mat::Mat(int rows, int cols) : rows_(rows), cols_(cols) {
   auto data = new number[rows_*cols_];
   data_.reset(data);
@@ -58,7 +60,7 @@ Mat& assign(Mat& dst, number x) {
   return dst;
 }
 
-Mat& assign(Mat& dst, const std::vector<number> xs) {
+Mat& assign(Mat& dst, const std::vector<number>& xs) {
   for (int i = 0; i < dst.rows(); ++i) {
     for (int j = 0; j < dst.cols(); ++j) {
       dst(i, j) = xs[dst.cols()*i+j];
@@ -72,6 +74,13 @@ Mat& assign(Mat& dst, const Mat& m) {
     for (int j = 0; j < dst.cols(); ++j) {
       dst(i, j) = m(i, j);
     }  
+  }
+  return dst;
+}
+
+Mat& assign(Row& dst, const Mat& m, int row) {
+  for (int i = 0; i < dst.cols(); ++i) {
+    dst(i) = m(row, i);
   }
   return dst;
 }
@@ -106,6 +115,15 @@ Mat& dot(Mat& dst, const Mat& m1, const Mat& m2) {
   return dst;
 }
 
+Mat& mul(Mat& dst, const Mat& m1, const Mat& m2) {
+  for (int i = 0; i < dst.rows(); ++i) {
+    for (int j = 0; j < dst.cols(); ++j) {
+      dst(i, j) = m1(i, j) * m2(i, j);
+    }  
+  }
+  return dst;
+}
+
 Mat& mul(Mat& dst, const Mat& m, number x) {
   for (int i = 0; i < dst.rows(); ++i) {
     for (int j = 0; j < dst.cols(); ++j) {
@@ -115,33 +133,102 @@ Mat& mul(Mat& dst, const Mat& m, number x) {
   return dst;
 }
 
-} // namespace matrix
+number max(const Mat& m) {
+  number max = m(0, 0);
+  for (int i = 0; i < m.rows(); ++i) {
+    for (int j = 0; j < m.cols(); ++j) {
+      max = std::max(max, m(i, j));
+    }  
+  }
+  return max;
+}
 
+number sum(const Mat& m) {
+  number s = 0;
+  for (int i = 0; i < m.rows(); ++i) {
+    for (int j = 0; j < m.cols(); ++j) {
+      s += m(i, j);
+    }  
+  }
+  return s;
+}
+
+static std::mt19937 gen(69);
+static std::uniform_real_distribution<> dis(0.0, 1.0);
+
+void rand_seed(int seed) {
+  gen = std::mt19937(seed);
+}
+
+number rand_number() {
+  return dis(gen);
+}
+
+Mat& random(Mat& dst) {
+  for (int i = 0; i < dst.rows(); ++i) {
+    for (int j = 0; j < dst.cols(); ++j) {
+      dst(i, j) = rand_number();
+    }  
+  }
+  return dst;
+}
+
+} // namespace matrix
 
 inline number sigmoid(number x) {
   return 1 / (1 + expf(-x));
 }
 
+static void softmax(Row& dst, const Row& src) {
+  assert(dst.cols() == src.cols());
+  number max = matrix::max(src);
+  for (int i = 0; i < dst.cols(); ++i) {
+    dst(i) = exp(src(i)-max);
+  }
+  number sum = matrix::sum(dst);
+  for (int i = 0; i < dst.cols(); ++i) {
+    dst(i) /= sum;
+  }
+}
+
 Row& activate(Act a, Row& dst, const Row& src) {
   switch (a) {
-  case Act::SIGMOID: {
+  case Act::NONE:
+    matrix::assign(dst, src);
+    break;
+  case Act::SIGMOID:
     for (int i = 0; i < src.cols(); ++i) {
       dst(i) = sigmoid(src(i));
     }
     break;
-  }
+  case Act::SOFTMAX:
+    softmax(dst, src);
+    break;
   }
   return dst;
 }
 
 Row& derivative(Act a, Row& dst, const Row& src) {
+  matrix::assign(dst, 0);
   switch (a) {
-  case Act::SIGMOID: {
+  case Act::NONE:
+    matrix::assign(dst, 1);
+    break;
+  case Act::SIGMOID:
     for (int i = 0; i < src.cols(); ++i) {
       dst(i) = sigmoid(src(i)) * (1-sigmoid(src(i)));
     }
     break;
-  }
+  case Act::SOFTMAX:
+    // FIXME: re-compute this, maybe cache?
+    Row p(dst.cols());
+    softmax(p, src);
+    for (int i = 0; i < src.cols(); ++i) {
+      for (int j = 0; j < dst.cols(); ++j) {
+        dst(j) += (i == j) ? (p(i)*(1-p(i))) : (-1*p(i)*p(j));
+      }
+    }
+    break;
   }
   return dst;
 }
@@ -162,11 +249,12 @@ void Layer::forward(Row& output) {
 void Layer::backward(Row& output) {
   matrix::assign(output, 0);
   derivative(act, Z_grad, Z);
+  matrix::mul(Z_grad, Z_grad, A_grad);
   for (int j = 0; j < W_grad.cols(); ++j) {
-    B_grad(j) += A_grad(j) * Z_grad(j);
+    B_grad(j) += Z_grad(j) * 1;
     for (int i = 0; i < W_grad.rows(); ++i) {
-      W_grad(i, j) += A_grad(j) * Z_grad(j) * X(i);
-      output(i) += A_grad(j) * Z_grad(j) * W(i, j);
+      W_grad(i, j) += Z_grad(j) * X(i);
+      output(i) += Z_grad(j) * W(i, j);
     }
   }
 }
@@ -187,6 +275,13 @@ void NN::start_learn() {
 
 void NN::add_layer(int insz, int outsz, Act act) {
   ls_.push_back(Layer(insz, outsz, act));
+}
+
+void NN::random() {
+  for (auto& l : ls_) {
+    matrix::random(l.W);
+    matrix::random(l.B);
+  }
 }
 
 void NN::forward(const Row& input_row, Row& output_row) {
@@ -215,6 +310,18 @@ void NN::backward(const Row& pred, const Row& want) {
   run_++;
 }
 
+void NN::backward(const Row& loss) {
+  matrix::assign(ls_.back().A_grad, loss);
+  for (int i = ls_.size()-1; i > 0; --i) {
+    Layer& curr = ls_[i];
+    Layer& prev = ls_[i-1];
+    curr.backward(prev.A_grad);
+  }
+  Row dummy(ls_.front().X.cols());
+  ls_.front().backward(dummy);
+  run_++;
+}
+
 std::ostream& operator<<(std::ostream& os, NN& nn) {
   os << "{" << std::endl;
   for (int i = 0; i < nn.nlayers(); ++i) {
@@ -226,7 +333,7 @@ std::ostream& operator<<(std::ostream& os, NN& nn) {
   return os;
 }
 
-void NN::end_learn() {
+void NN::end_learn(number learning_rate) {
   for (size_t i = 0; i < ls_.size(); ++i) {
     Layer& l = ls_[i];
     number scale = learning_rate / static_cast<number>(run_);

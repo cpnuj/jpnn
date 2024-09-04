@@ -51,7 +51,7 @@ int main() {
       want.from_mat(output, j);
       nn.backward(pred, want);
     }
-    nn.end_learn();
+    nn.end_learn(1);
   }
 
   std::cout << nn;
